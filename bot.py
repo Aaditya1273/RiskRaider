@@ -167,31 +167,8 @@ class EnhancedBot(commands.Bot):
     
     async def _get_prefix(self, bot, message: discord.Message) -> List[str]:
         """Dynamic prefix system with guild-specific prefixes"""
-        prefixes = [f"<@{self.user.id}> ", f"<@!{self.user.id}> "]  # Mentions
-        
-        if message.guild:
-            # Check cache first
-            if message.guild.id in self.guild_prefixes:
-                prefixes.append(self.guild_prefixes[message.guild.id])
-            else:
-                # Fetch from database and cache
-                if self.database:
-                    try:
-                        guild_prefix = await self.database.get_guild_prefix(message.guild.id)
-                        if guild_prefix:
-                            self.guild_prefixes[message.guild.id] = guild_prefix
-                            prefixes.append(guild_prefix)
-                        else:
-                            prefixes.append(self.config["prefix"])
-                    except Exception as e:
-                        self.logger.error(f"Error fetching guild prefix: {e}")
-                        prefixes.append(self.config["prefix"])
-                else:
-                    prefixes.append(self.config["prefix"])
-        else:
-            prefixes.append(self.config["prefix"])
-        
-        return prefixes
+        # Default prefixes are the bot's mention and the configured default prefix
+        return commands.when_mentioned_or(self.config["prefix"])(bot, message)
     
     async def setup_hook(self) -> None:
         """Enhanced setup with better error handling and performance optimizations"""
@@ -218,6 +195,10 @@ class EnhancedBot(commands.Bot):
             
             # Load extensions
             await self._load_extensions()
+            
+            # Sync slash commands to Discord
+            synced = await self.tree.sync()
+            self.logger.info(f"🔄 Synced {len(synced)} application commands.")
             
             # Start background tasks
             await self._start_background_tasks()
@@ -256,71 +237,6 @@ class EnhancedBot(commands.Bot):
         })
         
         return config
-    
-    async def _get_prefix(self, bot, message: discord.Message) -> List[str]:
-        """Dynamic prefix system with guild-specific prefixes"""
-        prefixes = [f"<@{self.user.id}> ", f"<@!{self.user.id}> "]  # Mentions
-        
-        if message.guild:
-            # Check cache first
-            if message.guild.id in self.guild_prefixes:
-                prefixes.append(self.guild_prefixes[message.guild.id])
-            else:
-                # Fetch from database and cache
-                if self.database:
-                    try:
-                        guild_prefix = await self.database.get_guild_prefix(message.guild.id)
-                        if guild_prefix:
-                            self.guild_prefixes[message.guild.id] = guild_prefix
-                            prefixes.append(guild_prefix)
-                        else:
-                            prefixes.append(self.config["prefix"])
-                    except Exception as e:
-                        self.logger.error(f"Error fetching guild prefix: {e}")
-                        prefixes.append(self.config["prefix"])
-                else:
-                    prefixes.append(self.config["prefix"])
-        else:
-            prefixes.append(self.config["prefix"])
-        
-        return prefixes
-    
-    async def setup_hook(self) -> None:
-        """Enhanced setup with better error handling and performance optimizations"""
-        try:
-            self.logger.info("=" * 60)
-            self.logger.info("🚀 Enhanced Discord Bot Starting Up...")
-            self.logger.info("=" * 60)
-            
-            # System information
-            self.logger.info(f"Bot: {self.user}")
-            self.logger.info(f"Discord.py: {discord.__version__}")
-            self.logger.info(f"Python: {platform.python_version()}")
-            self.logger.info(f"Platform: {platform.system()} {platform.release()}")
-            self.logger.info(f"Process ID: {os.getpid()}")
-            
-            # Setup HTTP session for external requests
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30),
-                connector=aiohttp.TCPConnector(limit=100, limit_per_host=30)
-            )
-            
-            # Initialize database
-            await self._init_database()
-            
-            # Load extensions
-            await self._load_extensions()
-            
-            # Start background tasks
-            await self._start_background_tasks()
-            
-            self.logger.info("✅ Bot setup completed successfully!")
-            
-        except Exception as e:
-            self.logger.critical(f"Failed to setup bot: {e}")
-            self.logger.critical(traceback.format_exc())
-            await self.close()
-            sys.exit(1)
     
     async def _init_database(self) -> None:
         """
@@ -383,7 +299,7 @@ class EnhancedBot(commands.Bot):
             statuses = [
                 f"with {len(self.guilds)} servers!",
                 f"with {len(self.users)} users!",
-                f"since {time.strftime('%H:%M', time.localtime(self.start_time))}",
+                f"since {time.strftime('%H:%M', time.localtime(self.start_time.timestamp()))}",
                 "and learning new tricks!",
                 f"with {len(self.commands)} commands!",
             ]
@@ -402,7 +318,7 @@ class EnhancedBot(commands.Bot):
     async def performance_monitor(self) -> None:
         """Monitor bot performance and log statistics"""
         try:
-            uptime = time.time() - self.start_time
+            uptime = time.time() - self.start_time.timestamp()
             memory_usage = sys.getsizeof(self) / 1024 / 1024  # MB
             
             stats = {
@@ -431,7 +347,7 @@ class EnhancedBot(commands.Bot):
             }
             
             # Reset command usage stats daily
-            if time.time() - self.start_time > 86400:  # 24 hours
+            if time.time() - self.start_time.timestamp() > 86400:  # 24 hours
                 self.command_usage.clear()
                 self.error_count = 0
             
@@ -556,8 +472,25 @@ class EnhancedBot(commands.Bot):
         
         # Unexpected errors
         else:
-            self.logger.error(f"Unhandled error in command '{ctx.command}': {error}")
-            raise error
+            error_id = hash(str(error)) % 10000
+            
+            self.logger.error(
+                f"❌ Unexpected error (ID: {error_id}) in command '{ctx.command}': {error}"
+            )
+            self.logger.error(traceback.format_exc())
+            
+            embed = discord.Embed(
+                title="💥 Unexpected Error",
+                description=f"An unexpected error occurred (Error ID: `{error_id}`).\n"
+                           f"This has been logged and will be investigated.",
+                color=0xE74C3C
+            )
+            
+            if self.config.get("debug_mode", False):
+                traceback_str = traceback.format_exc()
+                embed.add_field(name="Traceback", value=f"```py\n{traceback_str[:1000]}\n```", inline=False)
+            
+            await ctx.send(embed=embed)
     
     async def close(self) -> None:
         """Graceful shutdown with cleanup"""

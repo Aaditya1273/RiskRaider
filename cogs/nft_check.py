@@ -398,11 +398,11 @@ class NFTCheck(commands.Cog):
     )
     @app_commands.describe(
         wallet="Ethereum wallet address (0x...) or ENS domain (.eth)",
-        detailed="Show detailed analysis including connected wallets and transaction patterns"
     )
-    async def nftcheck(self, interaction: discord.Interaction, wallet: str, detailed: bool = False):
-        """Main NFT risk checking command"""
-        await interaction.response.defer(thinking=True)
+    async def nftcheck(self, interaction: discord.Interaction, wallet: str):
+        """Analyzes an NFT wallet for risk factors."""
+        # Defer the response to prevent timeout
+        await interaction.response.defer(thinking=True, ephemeral=True)
         
         try:
             # Rate limiting
@@ -429,7 +429,7 @@ class NFTCheck(commands.Cog):
             wallet = result
             
             # Check cache first
-            cache_key = hashlib.md5(f"{wallet}_{detailed}".encode()).hexdigest()
+            cache_key = hashlib.md5(f"{wallet}".encode()).hexdigest()
             cached_analysis = self.cache.get(cache_key)
             
             if cached_analysis:
@@ -475,15 +475,6 @@ class NFTCheck(commands.Cog):
             
             # Create and send final embed
             embed = self._create_detailed_embed(analysis, ai_summary)
-            
-            # Add detailed info if requested
-            if detailed and analysis.connected_wallets:
-                connected_list = "\n".join([f"`{w[:10]}...{w[-8:]}`" for w in analysis.connected_wallets[:5]])
-                embed.add_field(
-                    name="🔗 Connected Wallets",
-                    value=connected_list,
-                    inline=False
-                )
             
             await interaction.edit_original_response(embed=embed)
             
@@ -536,7 +527,11 @@ class NFTCheck(commands.Cog):
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @commands.command(name="clearcache", hidden=True)
+    @commands.command(
+        name="clearcache", 
+        description="(Admin) Clears the NFT analysis cache.",
+        hidden=True
+    )
     @commands.has_permissions(administrator=True)
     async def clear_cache(self, ctx):
         """Admin command to clear the analysis cache"""

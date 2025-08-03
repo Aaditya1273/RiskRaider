@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+from discord.ext.commands import Context
 import asyncio
 import aiohttp
 import psutil
