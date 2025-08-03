@@ -93,6 +93,20 @@ class NFTCheck(commands.Cog):
             timeout=aiohttp.ClientTimeout(total=30),
             connector=aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
         )
+        
+        # Debug API key loading
+        bitscrunch_key = os.getenv("BITSCRUNCH_API_KEY")
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        
+        if not bitscrunch_key:
+            logger.error("❌ bitsCrunch API key not found!")
+        else:
+            logger.info(f"✅ bitsCrunch API key loaded: {bitscrunch_key[:8]}...")
+            
+        if not openrouter_key:
+            logger.error("❌ OpenRouter API key not found!")
+        else:
+            logger.info(f"✅ OpenRouter API key loaded: {openrouter_key[:8]}...")
 
     async def cog_unload(self):
         """Clean up aiohttp session when cog unloads"""
@@ -109,6 +123,17 @@ class NFTCheck(commands.Cog):
     def _validate_wallet(self, wallet: str) -> Tuple[bool, str]:
         """Validate wallet address format"""
         wallet = wallet.strip().lower()
+        
+        # Check for common contract addresses (not wallets)
+        known_contracts = {
+            "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d": "Bored Ape Yacht Club (BAYC)",
+            "0x60e4d786628fea6478f785a6d7e704777c86a7c6": "Mutant Ape Yacht Club (MAYC)",
+            "0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258": "Otherdeed for Otherside",
+            "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85": "Ethereum Name Service (ENS)"
+        }
+        
+        if wallet in known_contracts:
+            return False, f"⚠️ This is a contract address ({known_contracts[wallet]}), not a wallet. Please enter a valid user wallet address."
         
         # Ethereum address validation
         if wallet.startswith('0x') and len(wallet) == 42:
@@ -176,14 +201,31 @@ class NFTCheck(commands.Cog):
                           headers: Dict, key: str) -> Dict:
         """Make a safe HTTP request with error handling"""
         try:
+            logger.info(f"📡 Making {key} API request to: {url}")
             async with session.get(url, headers=headers) as response:
+                logger.info(f"📡 {key} API Status Code: {response.status}")
+                
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    logger.info(f"✅ {key} API success - received {len(data)} fields")
+                    return data
                 else:
-                    logger.warning(f"API request failed for {key}: {response.status}")
+                    error_text = await response.text()
+                    logger.error(f"❌ {key} API failed: {response.status} - {error_text[:200]}")
+                    
+                    # Specific error messages for common issues
+                    if response.status == 401:
+                        logger.error(f"🔑 {key}: Invalid API key or unauthorized")
+                    elif response.status == 429:
+                        logger.error(f"⏱️ {key}: Rate limited - too many requests")
+                    elif response.status == 403:
+                        logger.error(f"🚫 {key}: Forbidden - key not approved for mainnet")
+                    elif response.status == 500:
+                        logger.error(f"💥 {key}: Server error")
+                    
                     return {}
         except Exception as e:
-            logger.error(f"Request error for {key}: {e}")
+            logger.error(f"💥 Request error for {key}: {e}")
             return {}
 
     async def _analyze_wallet_comprehensive(self, wallet: str, data: Dict) -> WalletAnalysis:
@@ -403,6 +445,8 @@ class NFTCheck(commands.Cog):
     @commands.command(name="nftcheck", help="🔍 Comprehensive NFT wallet risk analysis with AI insights")
     async def nftcheck(self, ctx: commands.Context, *, wallet: str):
         """Analyzes an NFT wallet for risk factors."""
+        logger.info(f"🔍 nftcheck called by {ctx.author} with wallet: {wallet}")
+        
         # Defer the response to prevent timeout
         async with ctx.typing():
             # Rate limiting
@@ -427,6 +471,7 @@ class NFTCheck(commands.Cog):
                 return
 
             wallet = result
+            logger.info(f"✅ Wallet validated: {wallet}")
             
             # Check cache first
             cache_key = hashlib.md5(f"{wallet}".encode()).hexdigest()
@@ -449,7 +494,10 @@ class NFTCheck(commands.Cog):
             status_message = await ctx.send(embed=status_embed)
             
             # Get data from bitsCrunch
+            logger.info(f"📡 Calling bitsCrunch API for wallet: {wallet}")
             bitscrunch_data = await self._fetch_bitscrunch_data(wallet)
+            logger.info(f"📊 bitsCrunch data received: {list(bitscrunch_data.keys())}")
+            logger.info(f"📊 Data contents: {bitscrunch_data}")
             
             if not any(bitscrunch_data.values()):
                 embed = discord.Embed(
@@ -480,6 +528,23 @@ class NFTCheck(commands.Cog):
             
             # Log successful analysis
             logger.info(f"NFT analysis completed for {wallet} (Risk: {analysis.risk_score})")
+            
+    @commands.Cog.listener()
+    async def on_command_error(self, ctx, error):
+        """Global error handler for debugging"""
+        if isinstance(error, commands.CommandInvokeError):
+            original_error = error.original
+            logger.error(f"💥 Command {ctx.command} failed: {original_error}")
+            
+            embed = discord.Embed(
+                title="❌ Command Error",
+                description=f"An error occurred: `{str(original_error)[:500]}`",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+        else:
+            logger.error(f"💥 Unhandled error in {ctx.command}: {error}")
+            await ctx.send(f"❌ Error: `{error}`")
             
 
     @commands.command(name="nftstats", help="📊 View your NFT checking statistics")
