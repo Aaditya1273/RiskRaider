@@ -315,6 +315,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE.md](LIC
 ---
 
 <p align="center">
-  <strong>Made with ❤️ by <a href="https://github.com/Aaditya1273">Aaditya Sharma</a></strong><br>
+  <strong>Made with ❤️ by <a href="https://github.com/Aaditya1273">Aaditya</a></strong><br>
   <em>Securing NFT communities, one analysis at a time.</em>
 </p>
