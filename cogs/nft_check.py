@@ -76,7 +76,7 @@ class NFTCheck(commands.Cog):
         self.session = None
         
         # API configurations
-        self.bitscrunch_base = "https://api.bitscrunch.com/v1"
+        self.bitscrunch_base = "https://api.unleashnfts.com/api/v1"
         self.openrouter_base = "https://openrouter.ai/api/v1"
         
         # Enhanced risk thresholds
@@ -122,7 +122,7 @@ class NFTCheck(commands.Cog):
 
     def _validate_wallet(self, wallet: str) -> Tuple[bool, str]:
         """Validate wallet address format"""
-        wallet = wallet.strip().lower()
+        wallet = wallet.strip()
         
         # Check for common contract addresses (not wallets)
         known_contracts = {
@@ -132,8 +132,9 @@ class NFTCheck(commands.Cog):
             "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85": "Ethereum Name Service (ENS)"
         }
         
-        if wallet in known_contracts:
-            return False, f"⚠️ This is a contract address ({known_contracts[wallet]}), not a wallet. Please enter a valid user wallet address."
+        wallet_lower = wallet.lower()
+        if wallet_lower in known_contracts:
+            return False, f"⚠️ This is a contract address ({known_contracts[wallet_lower]}), not a wallet. Please enter a valid user wallet address."
         
         # Ethereum address validation
         if wallet.startswith('0x') and len(wallet) == 42:
@@ -167,19 +168,32 @@ class NFTCheck(commands.Cog):
 
     async def _fetch_bitscrunch_data(self, wallet: str) -> Dict:
         """Fetch comprehensive data from bitsCrunch API"""
+        api_key = os.getenv('BITSCRUNCH_API_KEY')
+        if not api_key:
+            logger.error("BITSCRUNCH_API_KEY not found in environment variables.")
+            return {}
+
+        # Validate API key format (should be longer than 10 characters)
+        if len(api_key) < 10:
+            logger.error(f"BITSCRUNCH_API_KEY appears to be invalid (too short: {len(api_key)} characters)")
+            return {}
+
         headers = {
-            "Authorization": f"Bearer {os.getenv('BITSCRUNCH_API_KEY')}",
-            "Content-Type": "application/json"
+            "x-api-key": api_key,
+            "accept": "application/json"  # Added accept header as per API documentation
         }
         
         endpoints = {
-            "risk": f"{self.bitscrunch_base}/wallet/{wallet}/risk",
-            "profile": f"{self.bitscrunch_base}/wallet/{wallet}/profile", 
-            "transactions": f"{self.bitscrunch_base}/wallet/{wallet}/transactions?limit=100",
-            "connections": f"{self.bitscrunch_base}/wallet/{wallet}/connections"
+            "nfts": f"{self.bitscrunch_base}/nfts?address={wallet}&offset=0&limit=50",
+            "collections": f"{self.bitscrunch_base}/collections?limit=10",
+            "market_data": f"{self.bitscrunch_base}/nft_market_report?limit=5",
+            "blockchains": f"{self.bitscrunch_base}/blockchains?limit=5"
         }
         
         results = {}
+        
+        # Log the API key validation status (without exposing the actual key)
+        logger.info(f"🔑 bitsCrunch API key validation: {'✅ Valid' if len(api_key) > 20 else '⚠️ Potentially Invalid'}")
         
         session = self.session
         tasks = []
@@ -214,12 +228,18 @@ class NFTCheck(commands.Cog):
                     logger.error(f"❌ {key} API failed: {response.status} - {error_text[:200]}")
                     
                     # Specific error messages for common issues
-                    if response.status == 401:
+                    if response.status == 400:
+                        if "invalid request id" in error_text.lower():
+                            logger.error(f"🔑 {key}: Invalid request ID - this usually indicates an API key issue")
+                            logger.error("💡 Please verify your BITSCRUNCH_API_KEY is correct and active")
+                        else:
+                            logger.error(f"🔑 {key}: Bad request - check request format")
+                    elif response.status == 401:
                         logger.error(f"🔑 {key}: Invalid API key or unauthorized")
-                    elif response.status == 429:
-                        logger.error(f"⏱️ {key}: Rate limited - too many requests")
                     elif response.status == 403:
                         logger.error(f"🚫 {key}: Forbidden - key not approved for mainnet")
+                    elif response.status == 429:
+                        logger.error(f"⏱️ {key}: Rate limited - too many requests")
                     elif response.status == 500:
                         logger.error(f"💥 {key}: Server error")
                     
@@ -229,61 +249,100 @@ class NFTCheck(commands.Cog):
             return {}
 
     async def _analyze_wallet_comprehensive(self, wallet: str, data: Dict) -> WalletAnalysis:
-        """Perform comprehensive wallet analysis"""
-        risk_data = data.get("risk", {})
-        profile_data = data.get("profile", {})
-        tx_data = data.get("transactions", {})
-        connection_data = data.get("connections", {})
+        """Perform comprehensive wallet analysis using UnleashNFTs API data"""
+        nfts_data = data.get("nfts", {})
+        collections_data = data.get("collections", {})
+        market_data = data.get("market_data", {})
+        blockchains_data = data.get("blockchains", {})
         
-        # Extract basic metrics
-        risk_score = risk_data.get("riskScore", 0)
-        risky_nfts = risk_data.get("riskyNFTs", [])
+        # Extract NFT data for the specific wallet
+        nfts = nfts_data.get("nfts", []) if isinstance(nfts_data, dict) else []
+        nft_count = len(nfts)
         
-        # Advanced analysis
+        # Get market context from collections data
+        collections = collections_data.get("collections", []) if isinstance(collections_data, dict) else []
+        market_report = market_data.get("reports", []) if isinstance(market_data, dict) else []
+        
+        # Calculate risk score based on available data
+        risk_score = self._calculate_risk_score_simple(nft_count, nfts, collections)
+        
+        # Analyze NFTs for patterns
+        risky_nfts = []
         suspicious_activity = []
         recommendations = []
         
-        # Analyze transaction patterns
-        transactions = tx_data.get("transactions", [])
-        tx_count = len(transactions)
+        # Basic NFT analysis
+        if nft_count == 0:
+            suspicious_activity.append("ℹ️ No NFTs found - new wallet or inactive")
+            recommendations.append("🔍 Verify wallet activity through other means")
+        elif nft_count > 500:
+            suspicious_activity.append(f"📈 Very high NFT count ({nft_count}) - possible bot activity")
+            recommendations.append("⚠️ Investigate transaction patterns")
         
-        # Check for suspicious patterns
-        if risk_score > 80:
-            suspicious_activity.append("🚨 Extremely high risk score detected")
+        # Analyze based on available NFT data
+        collection_names = set()
+        for nft in nfts:
+            if isinstance(nft, dict):
+                collection_name = nft.get("collection_name", nft.get("name", "Unknown"))
+                collection_names.add(collection_name)
+                
+                # Check for potential red flags in NFT metadata
+                if any(flag in str(nft).lower() for flag in ['suspicious', 'flagged', 'reported']):
+                    risky_nfts.append({
+                        "name": nft.get("name", "Unknown NFT"),
+                        "collection": collection_name,
+                        "reason": "Metadata indicates potential issues"
+                    })
         
-        if len(risky_nfts) > 10:
-            suspicious_activity.append(f"⚠️ Large number of risky NFTs ({len(risky_nfts)})")
+        # Collection diversity analysis
+        unique_collections = len(collection_names)
+        if nft_count > 0 and unique_collections > 0:
+            diversity_ratio = unique_collections / nft_count
+            if diversity_ratio < 0.1:  # Less than 10% diversity
+                suspicious_activity.append(f"⚠️ Low collection diversity ({unique_collections} collections for {nft_count} NFTs)")
         
-        # Check transaction frequency
-        recent_txs = [tx for tx in transactions if self._is_recent_transaction(tx)]
-        if len(recent_txs) > 50:
-            suspicious_activity.append("📈 Unusually high transaction frequency")
-        
-        # Generate recommendations
+        # Generate risk-based recommendations
         if risk_score > 70:
-            recommendations.append("🛑 HIGH RISK: Avoid interacting with this wallet")
-            recommendations.append("🔍 Conduct additional due diligence")
+            recommendations.extend([
+                "🛑 HIGH RISK: Avoid interacting with this wallet",
+                "🔍 Conduct additional due diligence",
+                "📊 Verify wallet authenticity through multiple sources"
+            ])
         elif risk_score > 40:
-            recommendations.append("⚠️ CAUTION: Proceed with extra verification")
-            recommendations.append("💰 Consider smaller transaction amounts initially")
+            recommendations.extend([
+                "⚠️ CAUTION: Proceed with extra verification",
+                "💰 Consider smaller transaction amounts initially",
+                "🔍 Monitor wallet activity patterns"
+            ])
         else:
-            recommendations.append("✅ Generally safe for interaction")
-            recommendations.append("🔄 Regular monitoring recommended")
+            recommendations.extend([
+                "✅ Generally appears safe for interaction",
+                "🔄 Regular monitoring recommended",
+                "📈 Standard wallet activity detected"
+            ])
         
-        # Get wallet connections
-        connected_wallets = connection_data.get("connectedWallets", [])[:5]  # Limit to 5
+        # Add NFT-specific insights
+        if nft_count > 100:
+            recommendations.append("🎨 Active NFT collector detected")
+        elif nft_count > 0:
+            recommendations.append("🖼️ Moderate NFT activity")
+        else:
+            recommendations.append("🆕 No NFT activity - new or non-NFT wallet")
+        
+        # Estimate portfolio value (simplified)
+        estimated_value = nft_count * 100  # Very rough estimate
         
         return WalletAnalysis(
             wallet=wallet,
             risk_score=risk_score,
             risk_level=self._get_risk_level(risk_score),
             risky_nfts=risky_nfts,
-            transaction_count=tx_count,
-            total_value=profile_data.get("totalValue", 0),
+            transaction_count=nft_count,  # Use NFT count as proxy
+            total_value=estimated_value,
             suspicious_activity=suspicious_activity,
             recommendations=recommendations,
-            last_activity=self._get_last_activity(transactions),
-            connected_wallets=connected_wallets
+            last_activity=self._get_last_activity_simple(nfts),
+            connected_wallets=[]  # Not available in current API
         )
 
     def _is_recent_transaction(self, tx: Dict) -> bool:
@@ -297,21 +356,224 @@ class NFTCheck(commands.Cog):
     def _get_last_activity(self, transactions: List[Dict]) -> Optional[str]:
         """Get formatted last activity time"""
         if not transactions:
-            return None
+            return "No transactions found"
         
         try:
-            latest_tx = max(transactions, key=lambda x: x.get("timestamp", 0))
-            last_time = datetime.fromtimestamp(latest_tx.get("timestamp", 0))
+            # Filter out transactions without valid timestamps
+            valid_transactions = [tx for tx in transactions if tx.get("timestamp") and isinstance(tx.get("timestamp"), (int, float))]
             
+            if not valid_transactions:
+                return "No valid timestamps found"
+                
+            latest_tx = max(valid_transactions, key=lambda x: x.get("timestamp", 0))
+            timestamp = latest_tx.get("timestamp", 0)
+            
+            # Handle different timestamp formats
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = int(timestamp)
+                except ValueError:
+                    return "Unknown"
+            
+            # Convert timestamp to datetime
+            if timestamp > 10000000000:  # If timestamp is in milliseconds
+                timestamp = timestamp / 1000
+                
+            last_time = datetime.fromtimestamp(timestamp)
+            
+            # Calculate time difference
             time_diff = datetime.now() - last_time
-            if time_diff.days > 0:
+            
+            if time_diff.days > 365:
+                return f"{time_diff.days // 365} years ago"
+            elif time_diff.days > 30:
+                return f"{time_diff.days // 30} months ago"
+            elif time_diff.days > 0:
                 return f"{time_diff.days} days ago"
             elif time_diff.seconds > 3600:
                 return f"{time_diff.seconds // 3600} hours ago"
-            else:
+            elif time_diff.seconds > 60:
                 return f"{time_diff.seconds // 60} minutes ago"
-        except:
+            else:
+                return "Just now"
+                
+        except Exception as e:
+            logger.error(f"Error calculating last activity: {e}")
             return "Unknown"
+
+    def _calculate_risk_score(self, nfts: List[Dict], portfolio_data: Dict, balance_data: Dict) -> int:
+        """Calculate risk score based on NFT and portfolio data"""
+        risk_score = 0
+        
+        # Base risk factors
+        nft_count = len(nfts)
+        
+        # NFT count analysis
+        if nft_count == 0:
+            risk_score += 20  # No NFTs might indicate new/inactive wallet
+        elif nft_count > 1000:
+            risk_score += 30  # Extremely high NFT count could indicate bot activity
+        elif nft_count > 500:
+            risk_score += 15  # High but reasonable for active collectors
+        
+        # Collection diversity analysis
+        collections = {}
+        suspicious_count = 0
+        
+        for nft in nfts:
+            collection_name = nft.get("collection_name", "Unknown")
+            collections[collection_name] = collections.get(collection_name, 0) + 1
+            
+            # Check for suspicious indicators
+            if nft.get("is_suspicious", False):
+                suspicious_count += 1
+        
+        # Collection concentration risk
+        if collections:
+            max_collection_ratio = max(collections.values()) / nft_count
+            if max_collection_ratio > 0.9:  # 90%+ in one collection
+                risk_score += 25
+            elif max_collection_ratio > 0.7:  # 70%+ in one collection
+                risk_score += 15
+        
+        # Suspicious NFT ratio
+        if nft_count > 0:
+            suspicious_ratio = suspicious_count / nft_count
+            risk_score += int(suspicious_ratio * 40)  # Up to 40 points for suspicious NFTs
+        
+        # Portfolio value analysis
+        portfolio_value = portfolio_data.get("total_value_usd", 0)
+        if portfolio_value > 10000000:  # $10M+ could indicate institutional or high-risk activity
+            risk_score += 20
+        elif portfolio_value > 1000000:  # $1M+
+            risk_score += 10
+        
+        # Ensure score is within bounds
+        return min(max(risk_score, 0), 100)
+    
+    def _calculate_risk_score_simple(self, nft_count: int, nfts: List[Dict], collections: List[Dict]) -> int:
+        """Calculate simplified risk score based on available data"""
+        risk_score = 0
+        
+        # NFT count analysis
+        if nft_count == 0:
+            risk_score += 30  # No NFTs might indicate new/inactive wallet
+        elif nft_count > 1000:
+            risk_score += 40  # Extremely high NFT count could indicate bot activity
+        elif nft_count > 500:
+            risk_score += 25  # High but might be legitimate collector
+        elif nft_count > 100:
+            risk_score += 10  # Active collector
+        else:
+            risk_score += 5   # Normal activity
+        
+        # Collection analysis (if available)
+        if nfts:
+            collection_names = set()
+            suspicious_indicators = 0
+            
+            for nft in nfts:
+                if isinstance(nft, dict):
+                    collection_name = nft.get("collection_name", nft.get("name", "Unknown"))
+                    collection_names.add(collection_name)
+                    
+                    # Check for suspicious indicators in metadata
+                    nft_str = str(nft).lower()
+                    if any(flag in nft_str for flag in ['suspicious', 'flagged', 'reported', 'fake']):
+                        suspicious_indicators += 1
+            
+            # Collection diversity risk
+            if nft_count > 0:
+                diversity_ratio = len(collection_names) / nft_count
+                if diversity_ratio < 0.1:  # Very low diversity
+                    risk_score += 20
+                elif diversity_ratio < 0.3:  # Low diversity
+                    risk_score += 10
+            
+            # Suspicious indicators
+            if suspicious_indicators > 0:
+                suspicious_ratio = suspicious_indicators / nft_count
+                risk_score += int(suspicious_ratio * 30)  # Up to 30 points
+        
+        # Market context (if collections data available)
+        if collections and isinstance(collections, list):
+            # If we have market data, we can make more informed decisions
+            risk_score -= 5  # Slight reduction for having market context
+        
+        return min(max(risk_score, 0), 100)
+    
+    def _get_last_activity_simple(self, nfts: List[Dict]) -> Optional[str]:
+        """Get simplified last activity information"""
+        if not nfts:
+            return "No NFT activity found"
+        
+        # For now, just return a generic message based on NFT count
+        nft_count = len(nfts)
+        if nft_count > 100:
+            return "High activity - many NFTs detected"
+        elif nft_count > 10:
+            return "Moderate activity - several NFTs detected"
+        elif nft_count > 0:
+            return "Low activity - few NFTs detected"
+        else:
+            return "No NFT activity detected"
+    
+    def _get_last_activity_from_nfts(self, nfts: List[Dict]) -> Optional[str]:
+        """Get last activity time from NFT data"""
+        if not nfts:
+            return "No NFT activity found"
+        
+        try:
+            # Look for timestamp fields in NFT data
+            timestamps = []
+            for nft in nfts:
+                # Check various possible timestamp fields
+                for field in ['last_transfer_timestamp', 'created_at', 'updated_at', 'timestamp']:
+                    if field in nft and nft[field]:
+                        try:
+                            if isinstance(nft[field], str):
+                                # Try to parse ISO format or convert to int
+                                if 'T' in nft[field]:  # ISO format
+                                    timestamp = datetime.fromisoformat(nft[field].replace('Z', '+00:00')).timestamp()
+                                else:
+                                    timestamp = int(nft[field])
+                            else:
+                                timestamp = float(nft[field])
+                            
+                            if timestamp > 1000000000:  # Valid timestamp
+                                timestamps.append(timestamp)
+                        except (ValueError, TypeError):
+                            continue
+            
+            if not timestamps:
+                return "No timestamp data available"
+            
+            # Get the most recent timestamp
+            latest_timestamp = max(timestamps)
+            
+            # Handle milliseconds
+            if latest_timestamp > 10000000000:
+                latest_timestamp = latest_timestamp / 1000
+            
+            last_time = datetime.fromtimestamp(latest_timestamp)
+            time_diff = datetime.now() - last_time
+            
+            if time_diff.days > 365:
+                return f"{time_diff.days // 365} years ago"
+            elif time_diff.days > 30:
+                return f"{time_diff.days // 30} months ago"
+            elif time_diff.days > 0:
+                return f"{time_diff.days} days ago"
+            elif time_diff.seconds > 3600:
+                return f"{time_diff.seconds // 3600} hours ago"
+            elif time_diff.seconds > 60:
+                return f"{time_diff.seconds // 60} minutes ago"
+            else:
+                return "Recently active"
+                
+        except Exception as e:
+            logger.error(f"Error calculating NFT activity: {e}")
+            return "Activity data unavailable"
 
     async def _generate_ai_summary(self, analysis: WalletAnalysis) -> str:
         """Generate AI-powered risk assessment summary"""

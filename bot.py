@@ -1,3 +1,21 @@
+import os
+import logging
+from dotenv import load_dotenv
+
+# --- Environment Variable Loading ---
+# This is the most critical step: load the .env file before any other code runs.
+load_dotenv()
+
+# --- Early Diagnostics ---
+# Log the status of critical environment variables to quickly diagnose startup issues.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+logger.info(f"DISCORD_TOKEN loaded: {bool(os.getenv('DISCORD_TOKEN'))}")
+logger.info(f"BITSCRUNCH_API_KEY loaded: {bool(os.getenv('BITSCRUNCH_API_KEY'))}")
+logger.info(f"PREFIX loaded: {bool(os.getenv('PREFIX'))}")
+# --- End of Diagnostics ---
+
 import asyncio
 import json
 import logging
@@ -249,9 +267,9 @@ class EnhancedBot(commands.Bot):
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             
             # Initialize database manager using the factory function
-            self.database = await create_database_manager(db_path)
+            self.database = await create_database_manager(db_path, pool_size=5, timeout=30.0)
             
-            self.logger.info("️ Database connection established")
+            self.logger.info("🗄️ Database connection established")
             
         except Exception as e:
             self.logger.error(f"Database initialization failed: {e}")
