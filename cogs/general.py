@@ -56,7 +56,7 @@ class General(commands.Cog, name="general"):
             color=0xBEBEFE,
         )
         if spoiler_attachment is not None:
-            embed.set_image(url=attachment.url)
+            embed.set_image(url=spoiler_attachment.url)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # User context menu command
@@ -82,18 +82,20 @@ class General(commands.Cog, name="general"):
         embed = discord.Embed(
             title="Help", description="List of available commands:", color=0xBEBEFE
         )
-        for i in self.bot.cogs:
-            if i == "owner" and not (await self.bot.is_owner(context.author)):
+        for cog_name in self.bot.cogs:
+            cog = self.bot.get_cog(cog_name)
+            if cog is None:
                 continue
-            cog = self.bot.get_cog(i.lower())
             commands = cog.get_commands()
+            if not commands:
+                continue
             data = []
             for command in commands:
                 description = command.description.partition("\n")[0]
                 data.append(f"{command.name} - {description}")
             help_text = "\n".join(data)
             embed.add_field(
-                name=i.capitalize(), value=f"```{help_text}```", inline=False
+                name=cog_name.capitalize(), value=f"```{help_text}```", inline=False
             )
         await context.send(embed=embed)
 
