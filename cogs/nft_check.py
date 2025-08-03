@@ -7,7 +7,7 @@ import asyncio
 import aiohttp
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple
 import logging
 from dataclasses import dataclass
@@ -327,7 +327,7 @@ class NFTCheck(commands.Cog):
             title=f"🔍 NFT Wallet Analysis",
             description=ai_summary,
             color=color_map[analysis.risk_level],
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Wallet info

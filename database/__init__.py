@@ -68,6 +68,7 @@ class DatabaseManager:
             return
             
         try:
+            self._initialized = True
             # Ensure database directory exists
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -77,7 +78,6 @@ class DatabaseManager:
             # Initialize database schema
             await self._initialize_schema()
             
-            self._initialized = True
             self.logger.info(f"Database manager initialized with {self.pool_size} connections")
             
         except Exception as e:
@@ -150,21 +150,27 @@ class DatabaseManager:
     async def _get_connection(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         """Get a connection from the pool with automatic return."""
         if not self._initialized:
-            await self.initialize()
+            # This check prevents using the manager before it's ready.
+            raise DatabaseError("DatabaseManager is not initialized. Call initialize() first.")
             
-        async with self._pool_lock:
-            if not self._connection_pool:
-                raise DatabaseError("No available connections in pool")
-            conn = self._connection_pool.pop()
-        
+        conn = None
         try:
-            yield conn
-        except Exception as e:
-            self.logger.error(f"Database operation failed: {e}")
-            raise DatabaseError(f"Database operation failed: {e}")
-        finally:
             async with self._pool_lock:
-                self._connection_pool.append(conn)
+                if not self._connection_pool:
+                    # Wait for a connection to be returned to the pool
+                    self.logger.warning("Connection pool empty. Waiting for a connection.")
+                    # A more robust implementation might use an asyncio.Condition
+                    # to wait here instead of raising an error immediately.
+                    await asyncio.sleep(0.1) # Simple wait
+                    if not self._connection_pool:
+                        raise DatabaseError("No available connections in pool and timeout exceeded")
+                conn = self._connection_pool.pop()
+            
+            yield conn
+        finally:
+            if conn:
+                async with self._pool_lock:
+                    self._connection_pool.append(conn)
     
     async def add_warn(self, user_id: int, server_id: int, moderator_id: int, 
                       reason: str, severity: int = 1) -> int:

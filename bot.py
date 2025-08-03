@@ -8,6 +8,7 @@ import sys
 import traceback
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import signal
 
@@ -18,7 +19,7 @@ from discord.ext.commands import Context
 from dotenv import load_dotenv
 import aiohttp
 
-from database import DatabaseManager
+from database import DatabaseManager, create_database_manager
 
 # Load environment variables
 load_dotenv()
@@ -93,46 +94,11 @@ def setup_logging() -> logging.Logger:
     
     return logger
 
-class ConnectionPool:
-    """Database connection pool for better performance"""
-    
-    def __init__(self, db_path: str, max_connections: int = 10):
-        self.db_path = db_path
-        self.max_connections = max_connections
-        self._connections: List[aiosqlite.Connection] = []
-        self._available: asyncio.Queue = asyncio.Queue()
-        self._lock = asyncio.Lock()
-        
-    async def initialize(self):
-        """Initialize the connection pool"""
-        for _ in range(self.max_connections):
-            conn = await aiosqlite.connect(self.db_path)
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA synchronous=NORMAL")
-            await conn.execute("PRAGMA cache_size=10000")
-            await conn.execute("PRAGMA temp_store=MEMORY")
-            self._connections.append(conn)
-            await self._available.put(conn)
-    
-    @asynccontextmanager
-    async def get_connection(self):
-        """Get a connection from the pool"""
-        conn = await self._available.get()
-        try:
-            yield conn
-        finally:
-            await self._available.put(conn)
-    
-    async def close_all(self):
-        """Close all connections in the pool"""
-        for conn in self._connections:
-            await conn.close()
-
 class EnhancedBot(commands.Bot):
     """Enhanced Discord bot with advanced features and better error handling"""
     
-    def __init__(self):
-        # Enhanced intents for better functionality
+    def __init__(self, **kwargs) -> None:
+        # Setup intents inline to avoid method reference issue
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True  # For member management features
@@ -143,22 +109,24 @@ class EnhancedBot(commands.Bot):
         super().__init__(
             command_prefix=self._get_prefix,
             intents=intents,
-            help_command=None,
             case_insensitive=True,
             strip_after_prefix=True,
-            max_messages=10000,  # Message cache for better performance
+            help_command=None,
+            **kwargs
         )
         
-        # Bot configuration
+        # Configuration
         self.config = self._load_config()
-        self.logger = setup_logging()
-        self.start_time = time.time()
-        self.db_pool: Optional[ConnectionPool] = None
-        self.database: Optional[DatabaseManager] = None
+        
+        # Bot state
+        self.start_time = datetime.now(timezone.utc)
         self.session: Optional[aiohttp.ClientSession] = None
+        self.database: Optional[DatabaseManager] = None
+        self.command_usage: Dict[str, int] = {}
+        self.blacklist_cache: set = set()
+        self.logger = setup_logging()
         
         # Performance tracking
-        self.command_usage = {}
         self.error_count = 0
         self.last_activity = time.time()
         
@@ -192,7 +160,6 @@ class EnhancedBot(commands.Bot):
             "invite_link": os.getenv("INVITE_LINK", ""),
             "owner_ids": [int(id.strip()) for id in os.getenv("OWNER_IDS", "").split(",") if id.strip()],
             "debug_mode": os.getenv("DEBUG", "false").lower() == "true",
-            "max_db_connections": int(os.getenv("MAX_DB_CONNECTIONS", "10")),
             "command_cooldown": float(os.getenv("COMMAND_COOLDOWN", "1.0")),
         })
         
@@ -246,7 +213,99 @@ class EnhancedBot(commands.Bot):
                 connector=aiohttp.TCPConnector(limit=100, limit_per_host=30)
             )
             
-            # Initialize database with connection pooling
+            # Initialize database
+            await self._init_database()
+            
+            # Load extensions
+            await self._load_extensions()
+            
+            # Start background tasks
+            await self._start_background_tasks()
+            
+            self.logger.info("✅ Bot setup completed successfully!")
+            
+        except Exception as e:
+            self.logger.critical(f"Failed to setup bot: {e}")
+            self.logger.critical(traceback.format_exc())
+            await self.close()
+            sys.exit(1)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals gracefully"""
+        self.logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        asyncio.create_task(self.close())
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load configuration from environment variables with validation"""
+        required_vars = ["DISCORD_TOKEN"]
+        config = {}
+        
+        for var in required_vars:
+            value = os.getenv(var)
+            if not value:
+                raise ValueError(f"Required environment variable {var} is not set")
+            config[var.lower()] = value
+        
+        # Optional configuration with defaults
+        config.update({
+            "prefix": os.getenv("PREFIX", "!"),
+            "invite_link": os.getenv("INVITE_LINK", ""),
+            "owner_ids": [int(id.strip()) for id in os.getenv("OWNER_IDS", "").split(",") if id.strip()],
+            "debug_mode": os.getenv("DEBUG", "false").lower() == "true",
+            "command_cooldown": float(os.getenv("COMMAND_COOLDOWN", "1.0")),
+        })
+        
+        return config
+    
+    async def _get_prefix(self, bot, message: discord.Message) -> List[str]:
+        """Dynamic prefix system with guild-specific prefixes"""
+        prefixes = [f"<@{self.user.id}> ", f"<@!{self.user.id}> "]  # Mentions
+        
+        if message.guild:
+            # Check cache first
+            if message.guild.id in self.guild_prefixes:
+                prefixes.append(self.guild_prefixes[message.guild.id])
+            else:
+                # Fetch from database and cache
+                if self.database:
+                    try:
+                        guild_prefix = await self.database.get_guild_prefix(message.guild.id)
+                        if guild_prefix:
+                            self.guild_prefixes[message.guild.id] = guild_prefix
+                            prefixes.append(guild_prefix)
+                        else:
+                            prefixes.append(self.config["prefix"])
+                    except Exception as e:
+                        self.logger.error(f"Error fetching guild prefix: {e}")
+                        prefixes.append(self.config["prefix"])
+                else:
+                    prefixes.append(self.config["prefix"])
+        else:
+            prefixes.append(self.config["prefix"])
+        
+        return prefixes
+    
+    async def setup_hook(self) -> None:
+        """Enhanced setup with better error handling and performance optimizations"""
+        try:
+            self.logger.info("=" * 60)
+            self.logger.info("🚀 Enhanced Discord Bot Starting Up...")
+            self.logger.info("=" * 60)
+            
+            # System information
+            self.logger.info(f"Bot: {self.user}")
+            self.logger.info(f"Discord.py: {discord.__version__}")
+            self.logger.info(f"Python: {platform.python_version()}")
+            self.logger.info(f"Platform: {platform.system()} {platform.release()}")
+            self.logger.info(f"Process ID: {os.getpid()}")
+            
+            # Setup HTTP session for external requests
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+                connector=aiohttp.TCPConnector(limit=100, limit_per_host=30)
+            )
+            
+            # Initialize database
             await self._init_database()
             
             # Load extensions
@@ -264,29 +323,20 @@ class EnhancedBot(commands.Bot):
             sys.exit(1)
     
     async def _init_database(self) -> None:
-        """Initialize database with connection pooling"""
+        """
+        Initialize database connection.
+        """
         try:
             db_path = os.path.join(os.path.dirname(__file__), "database", "database.db")
+            
+            # Ensure database directory exists
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             
-            # Initialize connection pool
-            self.db_pool = ConnectionPool(db_path, self.config["max_db_connections"])
-            await self.db_pool.initialize()
+            # Initialize database manager using the factory function
+            self.database = await create_database_manager(db_path)
             
-            # Setup database schema
-            schema_path = os.path.join(os.path.dirname(__file__), "database", "schema.sql")
-            if os.path.exists(schema_path):
-                async with self.db_pool.get_connection() as conn:
-                    with open(schema_path, "r", encoding="utf-8") as f:
-                        await conn.executescript(f.read())
-                    await conn.commit()
-                    self.logger.info("📊 Database schema initialized")
+            self.logger.info("️ Database connection established")
             
-            # Initialize database manager
-            async with self.db_pool.get_connection() as conn:
-                self.database = DatabaseManager(connection=conn)
-                self.logger.info("🗃️ Database connection pool established")
-                
         except Exception as e:
             self.logger.error(f"Database initialization failed: {e}")
             raise
@@ -303,7 +353,7 @@ class EnhancedBot(commands.Bot):
         failed_count = 0
         
         for filename in os.listdir(cogs_dir):
-            if filename.endswith(".py") and not filename.startswith("_"):
+            if filename.endswith(".py") and not filename.startswith("_") and filename != "template.py":
                 extension = filename[:-3]
                 try:
                     start_time = time.time()
@@ -506,24 +556,8 @@ class EnhancedBot(commands.Bot):
         
         # Unexpected errors
         else:
-            error_id = hash(str(error)) % 10000
-            
-            self.logger.error(
-                f"❌ Unexpected error (ID: {error_id}) in command '{ctx.command}': {error}"
-            )
-            self.logger.error(traceback.format_exc())
-            
-            embed = discord.Embed(
-                title="💥 Unexpected Error",
-                description=f"An unexpected error occurred (Error ID: `{error_id}`).\n"
-                           f"This has been logged and will be investigated.",
-                color=0xE74C3C
-            )
-            
-            if self.config["debug_mode"]:
-                embed.add_field(name="Debug Info", value=f"```{str(error)[:1000]}```", inline=False)
-            
-            await ctx.send(embed=embed)
+            self.logger.error(f"Unhandled error in command '{ctx.command}': {error}")
+            raise error
     
     async def close(self) -> None:
         """Graceful shutdown with cleanup"""
@@ -540,8 +574,8 @@ class EnhancedBot(commands.Bot):
                 await self.session.close()
             
             # Close database connections
-            if self.db_pool:
-                await self.db_pool.close_all()
+            if self.database:
+                await self.database.close()
             
             # Close bot connection
             await super().close()

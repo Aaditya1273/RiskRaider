@@ -1,8 +1,6 @@
-
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-from discord.ext.commands import Context
 import asyncio
 import aiohttp
 import psutil
@@ -13,7 +11,7 @@ import sys
 import os
 import subprocess
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Union
 import platform
 
@@ -65,7 +63,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                     title=" Global Sync Complete",
                     description=f"Successfully synchronized {len(synced)} slash commands globally.",
                     color=0x00FF00,
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.now(timezone.utc)
                 )
                 embed.add_field(name=" Sync Time", value=f"{time.time() - start_time:.2f}s", inline=True)
                 embed.add_field(name=" Force Sync", value="Yes" if force else "No", inline=True)
@@ -78,7 +76,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                     title=" Guild Sync Complete",
                     description=f"Successfully synchronized {len(synced)} slash commands in **{context.guild.name}**.",
                     color=0x00FF00,
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.now(timezone.utc)
                 )
                 embed.add_field(name=" Sync Time", value=f"{time.time() - start_time:.2f}s", inline=True)
                 embed.add_field(name=" Guild ID", value=str(context.guild.id), inline=True)
@@ -91,7 +89,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                     title=" Commands Cleared",
                     description="All slash commands have been cleared from this guild.",
                     color=0xFFA500,
-                    timestamp=datetime.utcnow()
+                    timestamp=datetime.now(timezone.utc)
                 )
             else:
                 embed = discord.Embed(
@@ -105,7 +103,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Sync Failed",
                 description=f"Error during synchronization: ```py\n{str(e)}\n```",
                 color=0xFF0000,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             logging.error(f"Sync error: {e}")
             
@@ -128,7 +126,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Cog Loaded Successfully",
                 description=f"**{cog}** has been loaded and is ready to use.",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name=" Load Time", value=f"{load_time:.3f}s", inline=True)
             embed.add_field(name=" Extension Path", value=f"cogs.{cog}", inline=True)
@@ -137,19 +135,22 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Already Loaded",
                 description=f"Cog **{cog}** is already loaded.",
-                color=0xFFA500
+                color=0xFFA500,
+                timestamp=datetime.now(timezone.utc)
             )
         except commands.ExtensionNotFound:
             embed = discord.Embed(
                 title=" Cog Not Found",
                 description=f"Could not find cog **{cog}**. Check the filename and try again.",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
         except Exception as e:
             embed = discord.Embed(
                 title=" Load Failed",
                 description=f"Failed to load **{cog}**:\n```py\n{str(e)}\n```",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             logging.error(f"Cog load error ({cog}): {e}")
             
@@ -164,7 +165,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Protected Cog",
                 description="Cannot unload the owner cog for security reasons.",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             await context.send(embed=embed)
             return
@@ -176,20 +178,22 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Cog Unloaded",
                 description=f"**{cog}** has been unloaded successfully.",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             
         except commands.ExtensionNotLoaded:
             embed = discord.Embed(
                 title=" Not Loaded",
                 description=f"Cog **{cog}** is not currently loaded.",
-                color=0xFFA500
+                color=0xFFA500,
+                timestamp=datetime.now(timezone.utc)
             )
         except Exception as e:
             embed = discord.Embed(
                 title=" Unload Failed",
                 description=f"Failed to unload **{cog}**:\n```py\n{str(e)}\n```",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             
         await context.send(embed=embed)
@@ -209,7 +213,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Cog Reloaded",
                 description=f"**{cog}** has been hot-reloaded successfully.",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name=" Reload Time", value=f"{reload_time:.3f}s", inline=True)
             embed.add_field(name=" Hot Reload", value=" Enabled", inline=True)
@@ -221,19 +225,22 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 embed = discord.Embed(
                     title=" Cog Loaded",
                     description=f"**{cog}** was not loaded, so it has been loaded instead.",
-                    color=0x00FF00
+                    color=0x00FF00,
+                    timestamp=datetime.now(timezone.utc)
                 )
             except Exception as e:
                 embed = discord.Embed(
                     title=" Load Failed",
                     description=f"Could not load **{cog}**:\n```py\n{str(e)}\n```",
-                    color=0xFF0000
+                    color=0xFF0000,
+                    timestamp=datetime.now(timezone.utc)
                 )
         except Exception as e:
             embed = discord.Embed(
                 title=" Reload Failed",
                 description=f"Failed to reload **{cog}**:\n```py\n{str(e)}\n```",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             
         await context.send(embed=embed)
@@ -257,7 +264,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
         embed = discord.Embed(
             title=" Cog Management Dashboard",
             color=0x0099FF,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         loaded_list = "\n".join([f" {cog.split('.')[-1]}" for cog in loaded_cogs]) or "None"
@@ -291,7 +298,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
         embed = discord.Embed(
             title=" Mass Reload Complete",
             color=0x00FF00 if not failed_cogs else 0xFFA500,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         embed.add_field(name=" Success", value=str(success_count), inline=True)
@@ -324,7 +331,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
         embed = discord.Embed(
             title=" Bot Status Dashboard",
             color=0x0099FF,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         # Bot Information
@@ -411,7 +418,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Code Evaluation Success",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             
             embed.add_field(name=" Input", value=f"```py\n{code[:1000]}\n```", inline=False)
@@ -422,7 +429,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Code Evaluation Error",
                 color=0xFF0000,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name=" Input", value=f"```py\n{code[:1000]}\n```", inline=False)
             embed.add_field(name=" Error", value=f"```py\n{str(e)[:1000]}\n```", inline=False)
@@ -438,7 +445,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Error Logs",
                 description="No errors logged recently.",
-                color=0x00FF00
+                color=0x00FF00,
+                timestamp=datetime.now(timezone.utc)
             )
         else:
             recent_errors = self.error_log[-lines:]
@@ -448,7 +456,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Recent Error Logs",
                 description=f"```\n{log_text[:1900]}\n```",
                 color=0xFF0000,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name=" Total Errors", value=str(len(self.error_log)), inline=True)
             embed.add_field(name=" Showing", value=f"{len(recent_errors)} entries", inline=True)
@@ -466,7 +474,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             title=" Logs Cleared",
             description=f"Cleared {cleared_count} error log entries.",
             color=0x00FF00,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         await context.send(embed=embed)
 
@@ -478,7 +486,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
         """Create a configuration backup"""
         try:
             backup_data = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'bot_info': {
                     'name': self.bot.user.name,
                     'id': self.bot.user.id,
@@ -488,7 +496,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 'command_usage': self.command_usage
             }
             
-            filename = f"backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"backup_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
             with open(filename, 'w') as f:
                 json.dump(backup_data, f, indent=2)
             
@@ -496,7 +504,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Backup Created",
                 description=f"Configuration backup saved as `{filename}`",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name=" File Size", value=f"{os.path.getsize(filename)} bytes", inline=True)
             
@@ -504,7 +512,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Backup Failed",
                 description=f"Failed to create backup: {str(e)}",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
         
         await context.send(embed=embed)
@@ -514,13 +523,13 @@ class EnhancedOwner(commands.Cog, name="owner"):
         """Automated daily backup"""
         try:
             backup_data = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'extensions': list(self.bot.extensions.keys()),
                 'command_usage': self.command_usage,
                 'uptime': time.time() - self.start_time
             }
             
-            filename = f"auto_backup_{datetime.utcnow().strftime('%Y%m%d')}.json"
+            filename = f"auto_backup_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
             with open(filename, 'w') as f:
                 json.dump(backup_data, f, indent=2)
                 
@@ -538,7 +547,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             title=" Shutting Down",
             description="Bot is shutting down gracefully. Goodbye! ",
             color=0xFFA500,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         uptime = str(timedelta(seconds=int(time.time() - self.start_time)))
@@ -559,7 +568,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             title=" Restarting",
             description="Bot is restarting... This may take a moment.",
             color=0xFFA500,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         await context.send(embed=embed)
         
@@ -585,7 +594,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 embed = discord.Embed(
                     title=" Message Sent",
                     description=f"Message sent to {channel.mention}",
-                    color=0x00FF00
+                    color=0x00FF00,
+                    timestamp=datetime.now(timezone.utc)
                 )
                 await context.send(embed=embed, ephemeral=True)
             else:
@@ -599,7 +609,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Permission Error",
                 description="I don't have permission to send messages in that channel.",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             await context.send(embed=embed, ephemeral=True)
 
@@ -629,7 +640,7 @@ class EnhancedOwner(commands.Cog, name="owner"):
             title=title,
             description=description,
             color=color_int,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         embed.set_footer(text=f"Sent by {context.author}", icon_url=context.author.avatar.url)
         
@@ -640,7 +651,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 confirm_embed = discord.Embed(
                     title=" Embed Sent",
                     description=f"Embed sent to {channel.mention}",
-                    color=0x00FF00
+                    color=0x00FF00,
+                    timestamp=datetime.now(timezone.utc)
                 )
                 await context.send(embed=confirm_embed, ephemeral=True)
                 
@@ -648,7 +660,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
             error_embed = discord.Embed(
                 title=" Permission Error",
                 description="I don't have permission to send messages in that channel.",
-                color=0xFF0000
+                color=0xFF0000,
+                timestamp=datetime.now(timezone.utc)
             )
             await context.send(embed=error_embed, ephemeral=True)
 
@@ -666,14 +679,14 @@ class EnhancedOwner(commands.Cog, name="owner"):
                 title=" Maintenance Mode Enabled",
                 description="Bot is now in maintenance mode. Most commands will be disabled for non-owners.",
                 color=0xFFA500,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
         else:
             embed = discord.Embed(
                 title=" Maintenance Mode Disabled", 
                 description="Bot is now fully operational.",
                 color=0x00FF00,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(timezone.utc)
             )
         
         embed.add_field(name=" Changed By", value=context.author.mention, inline=True)
@@ -686,14 +699,15 @@ class EnhancedOwner(commands.Cog, name="owner"):
             embed = discord.Embed(
                 title=" Maintenance Mode",
                 description="Bot is currently under maintenance. Please try again later.",
-                color=0xFFA500
+                color=0xFFA500,
+                timestamp=datetime.now(timezone.utc)
             )
             await ctx.send(embed=embed)
             return
         
         # Log the error
         error_entry = {
-            'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
             'error': str(error),
             'command': ctx.command.name if ctx.command else 'Unknown',
             'user': str(ctx.author),
@@ -721,5 +735,8 @@ class EnhancedOwner(commands.Cog, name="owner"):
         embed = discord.Embed(
             title=" Bot Analytics Dashboard",
             color=0x0099FF,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
+
+async def setup(bot):
+    await bot.add_cog(EnhancedOwner(bot))
