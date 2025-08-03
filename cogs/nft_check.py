@@ -18,6 +18,14 @@ import hashlib
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Load environment variables from a .env file (if present)
+from dotenv import load_dotenv
+load_dotenv()
+
+# Log API key presence for early debugging
+logger.info(f"bitsCrunch key loaded: {bool(os.getenv('BITSCRUNCH_API_KEY'))}")
+logger.info(f"OpenRouter key loaded: {bool(os.getenv('OPENROUTER_API_KEY'))}")
+
 class RiskLevel(Enum):
     LOW = "🟢 LOW"
     MEDIUM = "🟡 MEDIUM" 
@@ -148,19 +156,19 @@ class NFTCheck(commands.Cog):
         
         results = {}
         
-        async with self.session as session:
-            tasks = []
-            for key, url in endpoints.items():
-                tasks.append(self._safe_request(session, url, headers, key))
-            
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for i, (key, response) in enumerate(zip(endpoints.keys(), responses)):
-                if isinstance(response, Exception):
-                    logger.error(f"Error fetching {key}: {response}")
-                    results[key] = {}
-                else:
-                    results[key] = response
+        session = self.session
+        tasks = []
+        for key, url in endpoints.items():
+            tasks.append(self._safe_request(session, url, headers, key))
+        
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for key, response in zip(endpoints.keys(), responses):
+            if isinstance(response, Exception):
+                logger.error(f"Error fetching {key}: {response}")
+                results[key] = {}
+            else:
+                results[key] = response
 
         return results
 
@@ -392,29 +400,21 @@ class NFTCheck(commands.Cog):
         empty = 10 - filled
         return "█" * filled + "░" * empty
 
-    @app_commands.command(
-        name="nftcheck", 
-        description="🔍 Comprehensive NFT wallet risk analysis with AI insights"
-    )
-    @app_commands.describe(
-        wallet="Ethereum wallet address (0x...) or ENS domain (.eth)",
-    )
-    async def nftcheck(self, interaction: discord.Interaction, wallet: str):
+    @commands.command(name="nftcheck", help="🔍 Comprehensive NFT wallet risk analysis with AI insights")
+    async def nftcheck(self, ctx: commands.Context, *, wallet: str):
         """Analyzes an NFT wallet for risk factors."""
         # Defer the response to prevent timeout
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        
-        try:
+        async with ctx.typing():
             # Rate limiting
-            if not await self._check_rate_limit(interaction.user.id):
+            if not await self._check_rate_limit(ctx.author.id):
                 embed = discord.Embed(
                     title="⏱️ Rate Limited",
                     description="You can only check 5 wallets per 10 minutes. Please try again later.",
                     color=discord.Color.red()
                 )
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await ctx.send(embed=embed)
                 return
-            
+
             # Validate wallet
             is_valid, result = self._validate_wallet(wallet)
             if not is_valid:
@@ -423,9 +423,9 @@ class NFTCheck(commands.Cog):
                     description=result,
                     color=discord.Color.red()
                 )
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await ctx.send(embed=embed)
                 return
-            
+
             wallet = result
             
             # Check cache first
@@ -436,7 +436,7 @@ class NFTCheck(commands.Cog):
                 ai_summary = await self._generate_ai_summary(cached_analysis)
                 embed = self._create_detailed_embed(cached_analysis, ai_summary)
                 embed.set_footer(text="Powered by bitsCrunch • Cached data")
-                await interaction.followup.send(embed=embed)
+                await ctx.send(embed=embed)
                 return
             
             # Fetch fresh data
@@ -446,7 +446,7 @@ class NFTCheck(commands.Cog):
                            f"⏳ This may take up to 30 seconds...",
                 color=discord.Color.blue()
             )
-            await interaction.followup.send(embed=status_embed)
+            status_message = await ctx.send(embed=status_embed)
             
             # Get data from bitsCrunch
             bitscrunch_data = await self._fetch_bitscrunch_data(wallet)
@@ -461,7 +461,7 @@ class NFTCheck(commands.Cog):
                                "Please try again in a few minutes.",
                     color=discord.Color.red()
                 )
-                await interaction.edit_original_response(embed=embed)
+                await status_message.edit(embed=embed)
                 return
             
             # Analyze the data
@@ -476,33 +476,16 @@ class NFTCheck(commands.Cog):
             # Create and send final embed
             embed = self._create_detailed_embed(analysis, ai_summary)
             
-            await interaction.edit_original_response(embed=embed)
+            await status_message.edit(embed=embed)
             
             # Log successful analysis
             logger.info(f"NFT analysis completed for {wallet} (Risk: {analysis.risk_score})")
             
-        except Exception as e:
-            logger.error(f"NFT check failed: {e}")
-            error_embed = discord.Embed(
-                title="⚠️ Analysis Failed",
-                description="An unexpected error occurred during analysis. Please try again later.",
-                color=discord.Color.red()
-            )
-            error_embed.add_field(
-                name="Error Details",
-                value=f"```{str(e)[:500]}```",
-                inline=False
-            )
-            
-            try:
-                await interaction.edit_original_response(embed=error_embed)
-            except:
-                await interaction.followup.send(embed=error_embed, ephemeral=True)
 
-    @app_commands.command(name="nftstats", description="📊 View your NFT checking statistics")
-    async def nftstats(self, interaction: discord.Interaction):
+    @commands.command(name="nftstats", help="📊 View your NFT checking statistics")
+    async def nftstats(self, ctx: commands.Context):
         """Show user's usage statistics"""
-        user_id = interaction.user.id
+        user_id = ctx.author.id
         recent_requests = len(self.rate_limits.get(user_id, []))
         
         embed = discord.Embed(
@@ -521,11 +504,11 @@ class NFTCheck(commands.Cog):
         )
         embed.add_field(
             name="🔄 Reset Time",
-            value="<t:{}:R>".format(int(time.time() + 600)),  # 10 minutes from now
+            value=f"<t:{int(time.time() + 600)}:R>",  # 10 minutes from now
             inline=True
         )
         
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
 
     @commands.command(
         name="clearcache", 
