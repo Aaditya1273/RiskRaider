@@ -1,11 +1,3 @@
-"""
-Copyright  RiskRaider Enhanced Bot Management System 2025
-Description:
- Advanced owner-only commands for RiskRaider with comprehensive bot management capabilities
-Features: Sync, Load/Unload, Performance Monitoring, Security, Debug Tools, and more
-
-Version: 7.0.0 - RiskRaider Ultimate Edition
-"""
 
 import discord
 from discord import app_commands
