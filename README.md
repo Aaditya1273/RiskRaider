@@ -230,7 +230,7 @@ export LOG_LEVEL=DEBUG
 
 > **Note**: You may need to use `py`, `python3`, or `python3.11` depending on your Python installation.
 
-## 🔥 Advanced Features
+## 🔥 Advanced Features:
 
 ### NFT Risk Analysis Engine
 - **Multi-layered Risk Assessment** - Combines transaction patterns, wallet behavior, and network analysis
